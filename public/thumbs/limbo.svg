@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 260 340">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#17213f"/><stop offset="1" stop-color="#0a1024"/></linearGradient>
+    <radialGradient id="glow" cx="50%" cy="32%" r="70%"><stop stop-color="#f7c948" stop-opacity=".38"/><stop offset=".55" stop-color="#ff2f9b" stop-opacity=".16"/><stop offset="1" stop-color="#0a1024" stop-opacity="0"/></radialGradient>
+    <filter id="ds"><feDropShadow dx="0" dy="14" stdDeviation="10" flood-color="#000" flood-opacity=".45"/></filter>
+  </defs>
+  <rect width="260" height="340" rx="16" fill="url(#bg)"/>
+  <rect x="1" y="1" width="258" height="338" rx="16" fill="none" stroke="#2d3a60"/>
+  <circle cx="130" cy="112" r="118" fill="url(#glow)"/>
+  <g filter="url(#ds)"><text x="130" y="154" text-anchor="middle" font-family="Arial Black,Arial" font-size="62" fill="#fff">∞</text><path d="M70 185 C105 145 150 220 190 165" stroke="#ff2f9b" stroke-width="13" fill="none" stroke-linecap="round"/></g>
+  <path d="M0 250 C70 226 142 270 260 226 V340 H0 Z" fill="#070b18" opacity=".78"/>
+</svg>
