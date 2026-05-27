@@ -3,9 +3,11 @@ import { createSession } from "@/lib/auth";
 import { hashPassword, id, now, transact } from "@/lib/db";
 import { publicState } from "@/lib/store";
 import { createSeedPair } from "@/lib/fairness";
+import { rateLimit, requestIp } from "@/lib/rateLimit";
 
 export async function POST(request: Request) {
   try {
+    rateLimit(`signup:${requestIp(request)}`, 5, 60_000);
     const body = await request.json();
     const email = String(body.email || "").trim().toLowerCase();
     const password = String(body.password || "");

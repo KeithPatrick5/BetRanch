@@ -113,7 +113,7 @@ export function verifyBet(user: User, betId: string, serverSeed?: string) {
   return { verified, bet, recomputed };
 }
 
-export async function createDeposit(user: User, amount: number, currency = "btc") {
+export function createDeposit(user: User, amount: number, currency = "btc") {
   return transact((db) => {
     assertRisk(db, user);
     const value = roundMoney(Number(amount));
@@ -121,6 +121,18 @@ export async function createDeposit(user: User, amount: number, currency = "btc"
     if (!Number.isFinite(value) || value <= 0 || value > (risk?.depositLimit || 500)) throw new Error("Deposit amount outside limits");
     const deposit: Deposit = { id: id("dep"), userId: user.id, amount: value, currency: currency.toLowerCase(), status: "pending", provider: "nowpayments", checkoutUrl: process.env.NOWPAYMENTS_API_KEY ? undefined : `/wallet?deposit=${Date.now()}`, createdAt: now(), updatedAt: now() };
     db.deposits.unshift(deposit);
+    return deposit;
+  });
+}
+
+export function attachDepositProvider(depositId: string, update: { providerPaymentId?: string; checkoutUrl?: string; raw?: unknown }) {
+  return transact((db) => {
+    const deposit = db.deposits.find((item) => item.id === depositId);
+    if (!deposit) throw new Error("Deposit not found");
+    if (update.providerPaymentId) deposit.providerPaymentId = update.providerPaymentId;
+    if (update.checkoutUrl) deposit.checkoutUrl = update.checkoutUrl;
+    if (update.raw) deposit.raw = update.raw;
+    deposit.updatedAt = now();
     return deposit;
   });
 }

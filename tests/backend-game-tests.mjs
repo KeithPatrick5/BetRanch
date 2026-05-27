@@ -162,7 +162,7 @@ assert.equal(game.roundMoney(state.wallet.balance), game.roundMoney(ledgerSum), 
 assert.ok(state.wallet.balance >= state.wallet.locked, "locked funds not above balance");
 
 console.log("Phase 12: deposit/withdrawal workflow");
-const dep = store.createDeposit(u, 25, "btc");
+const dep = await store.createDeposit(u, 25, "btc");
 const beforeDeposit = store.publicState(u.id).wallet.balance;
 const credited = store.handlePaymentWebhook({ depositId: dep.id, payment_status: "confirmed", actually_paid: 25, price_amount: 25 });
 assert.equal(credited.status, "confirmed", "deposit confirmed");

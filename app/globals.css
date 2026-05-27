@@ -1353,3 +1353,67 @@ th, td { padding: 9px 8px; border-bottom: 1px solid var(--v6-line-soft); }
     height: 80px;
   }
 }
+/* v12 frontend/game QA fixes */
+.v5-mines button.bomb { background: radial-gradient(circle, #ff8896, #ff3358 58%, #6e1020); color: #fff; border-color: rgba(255,77,94,.75); box-shadow: 0 0 28px rgba(255,77,94,.35), inset 0 -12px 24px rgba(0,0,0,.28); }
+.tower-machine button.revealed { background: radial-gradient(circle, #fff09b, var(--v5-green) 60%, #1b8a58); color: #102a1f; border-color: rgba(72,245,66,.55); }
+.control-pack .btn.wide { width: 100%; justify-content: center; margin-top: 8px; }
+.segmented button:disabled, .mines-machine button:disabled, .tower-machine button:disabled { cursor: not-allowed; opacity: .72; }
+
+/* v13 gameplay matching pass */
+.stage-stat-row {
+  width: min(620px, 92%);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  color: #cfd9ff;
+  font-size: 13px;
+  font-weight: 850;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin: 0 auto 14px;
+}
+.stage-stat-row b {
+  color: var(--v5-green);
+  font-size: 16px;
+}
+.mines-wrap {
+  display: grid;
+  place-items: center;
+  width: 100%;
+}
+.v5-mines .bomb,
+.tower-machine .bomb {
+  background: radial-gradient(circle at 50% 50%, #ff5a6f, #6a0d1f 70%) !important;
+  color: #fff !important;
+  border-color: rgba(255,90,111,.8) !important;
+  box-shadow: 0 0 24px rgba(255,90,111,.45), inset 0 2px 0 rgba(255,255,255,.18) !important;
+}
+.keno-machine .keno-drawn {
+  background: #263a62;
+  border-color: #4d6ea8;
+  color: #e7eeff;
+}
+.keno-machine .keno-hit {
+  background: radial-gradient(circle at 50% 45%, var(--v5-green), #167a42);
+  color: #06150d;
+  border-color: rgba(72,245,66,.9);
+  box-shadow: 0 0 16px rgba(72,245,66,.4);
+}
+.plinko-buckets .bucket-hit {
+  outline: 2px solid var(--v5-green);
+  box-shadow: 0 0 18px rgba(72,245,66,.45);
+}
+.rps-machine .active {
+  outline: 2px solid var(--v5-pink);
+  box-shadow: 0 0 18px rgba(255,59,150,.42);
+}
+.rps-machine span,
+.crash-cashout {
+  color: #cfd9ff;
+  font-weight: 850;
+  font-size: 13px;
+}
+.wheel-core {
+  transition: rotate .25s ease;
+}
