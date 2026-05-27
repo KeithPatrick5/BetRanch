@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { BET_LIMITS, runGame, type GameKey } from "./gameEngine";
+import { BET_LIMITS, compareOutcome, minesMultiplier, towerMultiplier, crashPoint, hiloDeck, blackjackDeck, handValue, cardName, cardRank, runGame, type GameKey } from "./gameEngine";
 import { createSeedPair, sha256, rollInt, sampleWithoutReplacement, type FairInput } from "./fairness";
 import { id, now, readDb, roundMoney, transact, type AppDb, type BetRecord, type Deposit, type GameSession, type User, type Withdrawal } from "./db";
 import { addLedger, availableBalance, finalizeLockedWithdrawal, getWallet, lockFunds, unlockFunds } from "./money";
@@ -109,7 +109,7 @@ export function verifyBet(user: User, betId: string, serverSeed?: string) {
   if (!revealed) return { verified: false, reason: "Server seed is not revealed yet", bet };
   if (sha256(revealed) !== bet.serverSeedHash) return { verified: false, reason: "Server seed hash mismatch", bet };
   const recomputed = runGame(bet.game as GameKey, bet.wager, { serverSeed: revealed, clientSeed: bet.clientSeed, nonce: bet.nonce }, bet.params);
-  const verified = recomputed.result === bet.result && recomputed.payout === bet.payout && JSON.stringify(recomputed.proof) === JSON.stringify(bet.proof);
+  const verified = compareOutcome(recomputed, bet as any);
   return { verified, bet, recomputed };
 }
 
@@ -138,8 +138,14 @@ export function handlePaymentWebhook(payload: any, signature?: string) {
     deposit.raw = payload;
     deposit.updatedAt = now();
     const status = String(payload.payment_status || payload.status || "").toLowerCase();
+    const actuallyPaid = Number(payload.actually_paid ?? payload.pay_amount ?? payload.amount_received ?? deposit.amount);
+    const required = Number(payload.price_amount ?? payload.amount ?? deposit.amount);
     if (["finished", "confirmed", "sending"].includes(status) && !deposit.creditedLedgerId) {
-      deposit.status = "confirmed";
+      if (Number.isFinite(actuallyPaid) && Number.isFinite(required) && actuallyPaid + 0.00000001 < required) {
+        deposit.status = "underpaid";
+        return deposit;
+      }
+      deposit.status = Number.isFinite(actuallyPaid) && actuallyPaid > required ? "overpaid" : "confirmed";
       const ledger = addLedger(db, deposit.userId, "deposit_confirmed", deposit.amount, deposit.id, "NOWPayments confirmed", `deposit:${deposit.id}`);
       deposit.creditedLedgerId = ledger.id;
     } else if (["expired", "failed"].includes(status)) deposit.status = status as Deposit["status"];
@@ -224,37 +230,284 @@ export function liveFeed() {
   return db.bets.slice(0, 100).map((bet) => ({ ...bet, displayName: users[bet.userId]?.privacyMode ? `rancher_${bet.id.slice(-4)}` : users[bet.userId]?.displayName || "rancher" }));
 }
 
-// Session games. These are intentionally small but server-owned, restorable, and verifyable.
+// Session games. These are server-owned, restorable, ledger-backed, and verifyable.
+function validateSessionWager(db: AppDb, user: User, wager: number) {
+  const value = roundMoney(Number(wager));
+  if (!Number.isFinite(value) || value < BET_LIMITS.min || value > BET_LIMITS.max) throw new Error(`Wager must be between ${BET_LIMITS.min} and ${BET_LIMITS.max}`);
+  assertRisk(db, user, value);
+  const wallet = getWallet(db, user.id);
+  if (availableBalance(wallet) < value) throw new Error("Insufficient balance");
+  return value;
+}
+
 export function startMines(user: User, wager: number, mineCount = 3) {
   return transact((db) => {
-    assertRisk(db, user, wager);
-    const wallet = getWallet(db, user.id); if (availableBalance(wallet) < wager) throw new Error("Insufficient balance");
-    const seed = getSeed(db, user.id); const fair = { serverSeed: seed.serverSeed, clientSeed: seed.clientSeed, nonce: seed.nonce };
-    const mines = sampleWithoutReplacement(fair, 25, Math.max(1, Math.min(24, Math.floor(mineCount))));
-    const session: GameSession = { id: id("game"), userId: user.id, game: "mines", status: "active", wager, payout: 0, profit: -wager, nonce: seed.nonce, clientSeed: seed.clientSeed, serverSeedHash: seed.serverSeedHash, state: { mineCount, mines, revealed: [] }, proof: { mineCount, mines }, idempotencyKey: id("idem"), createdAt: now(), updatedAt: now() };
-    addLedger(db, user.id, "bet_debit", -wager, session.id, "mines session wager"); seed.nonce += 1; db.gameSessions.unshift(session); return session;
+    const value = validateSessionWager(db, user, wager);
+    const seed = getSeed(db, user.id);
+    const count = Math.max(1, Math.min(24, Math.floor(Number(mineCount) || 3)));
+    const fair = { serverSeed: seed.serverSeed, clientSeed: seed.clientSeed, nonce: seed.nonce };
+    const mines = sampleWithoutReplacement(fair, 25, count);
+    const session: GameSession = {
+      id: id("game"), userId: user.id, game: "mines", status: "active",
+      wager: value, payout: 0, profit: -value, nonce: seed.nonce, clientSeed: seed.clientSeed, serverSeedHash: seed.serverSeedHash,
+      state: { mineCount: count, mines, revealed: [] }, params: { mineCount: count }, proof: { game: "mines", mineCount: count, mines },
+      idempotencyKey: id("idem"), createdAt: now(), updatedAt: now()
+    };
+    addLedger(db, user.id, "bet_debit", -value, session.id, "mines session wager");
+    seed.nonce += 1;
+    db.gameSessions.unshift(session);
+    return session;
   });
 }
+
 export function revealMinesTile(user: User, sessionId: string, tile: number) {
   return transact((db) => {
-    const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id && x.game === "mines"); if (!s || s.status !== "active") throw new Error("Active Mines session not found");
-    const mines = s.state.mines as number[]; const revealed = s.state.revealed as number[]; if (tile < 0 || tile > 24 || revealed.includes(tile)) throw new Error("Invalid tile");
-    if (mines.includes(tile)) { s.status = "busted"; s.profit = -s.wager; }
-    else { revealed.push(tile); s.state.revealed = revealed; s.payout = roundMoney(s.wager * (1 + revealed.length * 0.18)); s.profit = roundMoney(s.payout - s.wager); }
-    s.updatedAt = now(); return s;
+    const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id && x.game === "mines");
+    if (!s || s.status !== "active") throw new Error("Active Mines session not found");
+    const selected = Math.floor(Number(tile));
+    const mines = s.state.mines as number[];
+    const revealed = (s.state.revealed as number[]) || [];
+    if (!Number.isInteger(selected) || selected < 0 || selected > 24 || revealed.includes(selected)) throw new Error("Invalid tile");
+    if (mines.includes(selected)) {
+      s.status = "busted";
+      s.payout = 0;
+      s.profit = -s.wager;
+      s.state = { ...s.state, bustedTile: selected, finalMines: mines };
+    } else {
+      revealed.push(selected);
+      const mineCount = Number(s.state.mineCount || 3);
+      s.state.revealed = revealed;
+      s.payout = roundMoney(s.wager * minesMultiplier(mineCount, revealed.length));
+      s.profit = roundMoney(s.payout - s.wager);
+      if (revealed.length >= 25 - mineCount) {
+        s.status = "complete";
+        addLedger(db, user.id, "bet_win", s.payout, s.id, "mines full clear");
+      }
+    }
+    s.updatedAt = now();
+    return s;
   });
 }
+
+export function startTower(user: User, wager: number, rows = 6) {
+  return transact((db) => {
+    const value = validateSessionWager(db, user, wager);
+    const rowCount = Math.max(1, Math.min(8, Math.floor(Number(rows) || 6)));
+    const seed = getSeed(db, user.id);
+    const fair = { serverSeed: seed.serverSeed, clientSeed: seed.clientSeed, nonce: seed.nonce };
+    const traps = Array.from({ length: rowCount }, (_, row) => rollInt({ ...fair, cursor: row }, 3));
+    const s: GameSession = {
+      id: id("game"), userId: user.id, game: "tower", status: "active",
+      wager: value, payout: 0, profit: -value, nonce: seed.nonce, clientSeed: seed.clientSeed, serverSeedHash: seed.serverSeedHash,
+      state: { rows: rowCount, width: 3, traps, currentRow: 0, picks: [] }, params: { rows: rowCount, width: 3 }, proof: { game: "tower", traps },
+      idempotencyKey: id("idem"), createdAt: now(), updatedAt: now()
+    };
+    addLedger(db, user.id, "bet_debit", -value, s.id, "tower session wager");
+    seed.nonce += 1;
+    db.gameSessions.unshift(s);
+    return s;
+  });
+}
+
+export function pickTower(user: User, sessionId: string, pick: number) {
+  return transact((db) => {
+    const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id && x.game === "tower");
+    if (!s || s.status !== "active") throw new Error("Active Tower session not found");
+    const row = Number(s.state.currentRow || 0);
+    const traps = s.state.traps as number[];
+    const picks = (s.state.picks as number[]) || [];
+    const selected = Math.floor(Number(pick));
+    if (!Number.isInteger(selected) || selected < 0 || selected > 2) throw new Error("Invalid tower pick");
+    if (row !== picks.length || row >= traps.length) throw new Error("Invalid tower row");
+    if (traps[row] === selected) {
+      s.status = "busted";
+      s.payout = 0;
+      s.profit = -s.wager;
+      s.state = { ...s.state, bustRow: row, bustPick: selected };
+    } else {
+      picks.push(selected);
+      s.state.picks = picks;
+      s.state.currentRow = row + 1;
+      s.payout = roundMoney(s.wager * towerMultiplier(picks.length, 3));
+      s.profit = roundMoney(s.payout - s.wager);
+      if (row + 1 >= traps.length) {
+        s.status = "complete";
+        addLedger(db, user.id, "bet_win", s.payout, s.id, "tower complete");
+      }
+    }
+    s.updatedAt = now();
+    return s;
+  });
+}
+
+export function startHilo(user: User, wager: number) {
+  return transact((db) => {
+    const value = validateSessionWager(db, user, wager);
+    const seed = getSeed(db, user.id);
+    const fair = { serverSeed: seed.serverSeed, clientSeed: seed.clientSeed, nonce: seed.nonce };
+    const deck = hiloDeck(fair, 20);
+    const s: GameSession = {
+      id: id("game"), userId: user.id, game: "hilo", status: "active",
+      wager: value, payout: value, profit: 0, nonce: seed.nonce, clientSeed: seed.clientSeed, serverSeedHash: seed.serverSeedHash,
+      state: { deck, cursor: 1, currentCard: deck[0], history: [cardName(deck[0])] }, proof: { game: "hilo", deck: deck.map(cardName) },
+      idempotencyKey: id("idem"), createdAt: now(), updatedAt: now()
+    };
+    addLedger(db, user.id, "bet_debit", -value, s.id, "hilo session wager");
+    seed.nonce += 1;
+    db.gameSessions.unshift(s);
+    return s;
+  });
+}
+
+export function pickHilo(user: User, sessionId: string, choice: "higher" | "lower") {
+  return transact((db) => {
+    const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id && x.game === "hilo");
+    if (!s || s.status !== "active") throw new Error("Active Hilo session not found");
+    const valid = choice === "higher" || choice === "lower" ? choice : "higher";
+    const deck = s.state.deck as number[];
+    const cursor = Number(s.state.cursor || 1);
+    const currentCard = Number(s.state.currentCard);
+    const nextCard = deck[cursor];
+    if (nextCard === undefined) throw new Error("Deck exhausted");
+    const current = cardRank(currentCard);
+    const next = cardRank(nextCard);
+    const win = valid === "higher" ? next > current : next < current;
+    const push = next === current;
+    const history = [...((s.state.history as string[]) || []), cardName(nextCard)];
+    if (push) {
+      s.state = { ...s.state, cursor: cursor + 1, currentCard: nextCard, history, lastChoice: valid, lastResult: "push" };
+    } else if (win) {
+      const wins = Number(s.state.wins || 0) + 1;
+      s.payout = roundMoney(s.wager * Math.pow(1.94, wins));
+      s.profit = roundMoney(s.payout - s.wager);
+      s.state = { ...s.state, cursor: cursor + 1, currentCard: nextCard, history, wins, lastChoice: valid, lastResult: "win" };
+    } else {
+      s.status = "busted";
+      s.payout = 0;
+      s.profit = -s.wager;
+      s.state = { ...s.state, cursor: cursor + 1, currentCard: nextCard, history, lastChoice: valid, lastResult: "loss" };
+    }
+    s.updatedAt = now();
+    return s;
+  });
+}
+
+export function startCrash(user: User, wager: number, autoCashout = 2) {
+  return transact((db) => {
+    const value = validateSessionWager(db, user, wager);
+    const target = Math.max(1.01, Math.min(1000, Number(autoCashout) || 2));
+    const seed = getSeed(db, user.id);
+    const fair = { serverSeed: seed.serverSeed, clientSeed: seed.clientSeed, nonce: seed.nonce };
+    const crashAt = crashPoint(fair);
+    const won = crashAt >= target;
+    const payout = won ? roundMoney(value * target) : 0;
+    const status: GameSession["status"] = won ? "cashed_out" : "busted";
+    const s: GameSession = {
+      id: id("game"), userId: user.id, game: "crash", status,
+      wager: value, payout, profit: roundMoney(payout - value), nonce: seed.nonce, clientSeed: seed.clientSeed, serverSeedHash: seed.serverSeedHash,
+      state: { autoCashout: target, crashAt, cashedOutAt: won ? target : undefined }, params: { autoCashout: target }, proof: { game: "crash", autoCashout: target, crashAt },
+      idempotencyKey: id("idem"), createdAt: now(), updatedAt: now()
+    };
+    addLedger(db, user.id, "bet_debit", -value, s.id, "crash session wager");
+    if (payout > 0) addLedger(db, user.id, "bet_win", payout, s.id, "crash auto cashout");
+    seed.nonce += 1;
+    db.gameSessions.unshift(s);
+    return s;
+  });
+}
+
+export function startBlackjack(user: User, wager: number) {
+  return transact((db) => {
+    const value = validateSessionWager(db, user, wager);
+    const seed = getSeed(db, user.id);
+    const fair = { serverSeed: seed.serverSeed, clientSeed: seed.clientSeed, nonce: seed.nonce };
+    const deck = blackjackDeck(fair);
+    const playerCards = [deck[0], deck[2]];
+    const dealerCards = [deck[1], deck[3]];
+    const player = handValue(playerCards);
+    const natural = player === 21;
+    const s: GameSession = {
+      id: id("game"), userId: user.id, game: "blackjack", status: natural ? "complete" : "active",
+      wager: value, payout: natural ? roundMoney(value * 2.5) : 0, profit: natural ? roundMoney(value * 1.5) : -value,
+      nonce: seed.nonce, clientSeed: seed.clientSeed, serverSeedHash: seed.serverSeedHash,
+      state: { deck, cursor: 4, playerCards, dealerCards, player, dealerUpCard: cardName(dealerCards[0]), actionLog: ["deal"], natural },
+      proof: { game: "blackjack", deck: deck.map(cardName) }, idempotencyKey: id("idem"), createdAt: now(), updatedAt: now()
+    };
+    addLedger(db, user.id, "bet_debit", -value, s.id, "blackjack session wager");
+    if (natural) addLedger(db, user.id, "bet_win", s.payout, s.id, "blackjack natural");
+    seed.nonce += 1;
+    db.gameSessions.unshift(s);
+    return s;
+  });
+}
+
+export function blackjackAction(user: User, sessionId: string, action: "hit" | "stand" | "double") {
+  return transact((db) => {
+    const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id && x.game === "blackjack");
+    if (!s || s.status !== "active") throw new Error("Active Blackjack session not found");
+    const deck = s.state.deck as number[];
+    const playerCards = [...((s.state.playerCards as number[]) || [])];
+    const dealerCards = [...((s.state.dealerCards as number[]) || [])];
+    let cursor = Number(s.state.cursor || 4);
+    const act = action === "hit" || action === "double" || action === "stand" ? action : "stand";
+    const actionLog = [...((s.state.actionLog as string[]) || []), act];
+
+    if (act === "hit" || act === "double") {
+      if (act === "double" && playerCards.length !== 2) throw new Error("Double only allowed as first action");
+      playerCards.push(deck[cursor++]);
+      if (act === "double") {
+        addLedger(db, user.id, "bet_debit", -s.wager, s.id, "blackjack double wager");
+        s.wager = roundMoney(s.wager * 2);
+      }
+    }
+
+    let player = handValue(playerCards);
+    if (player > 21) {
+      s.status = "busted";
+      s.payout = 0;
+      s.profit = -s.wager;
+      s.state = { ...s.state, playerCards, dealerCards, cursor, player, actionLog, result: "player_bust" };
+      s.updatedAt = now();
+      return s;
+    }
+
+    if (act === "stand" || act === "double") {
+      let dealer = handValue(dealerCards);
+      while (dealer < 17 && cursor < deck.length) {
+        dealerCards.push(deck[cursor++]);
+        dealer = handValue(dealerCards);
+      }
+      player = handValue(playerCards);
+      let payout = 0;
+      let result = "dealer_win";
+      if (dealer > 21 || player > dealer) { payout = roundMoney(s.wager * 2); result = dealer > 21 ? "dealer_bust" : "player_win"; }
+      else if (player === dealer) { payout = s.wager; result = "push"; }
+      s.status = "complete";
+      s.payout = payout;
+      s.profit = roundMoney(payout - s.wager);
+      if (payout > 0) addLedger(db, user.id, payout === s.wager ? "bet_refund" : "bet_win", payout, s.id, `blackjack ${result}`);
+      s.state = { ...s.state, playerCards, dealerCards, cursor, player, dealer, actionLog, result };
+      s.updatedAt = now();
+      return s;
+    }
+
+    s.state = { ...s.state, playerCards, dealerCards, cursor, player, actionLog };
+    s.updatedAt = now();
+    return s;
+  });
+}
+
 export function cashoutSession(user: User, sessionId: string) {
   return transact((db) => {
-    const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id); if (!s || s.status !== "active") throw new Error("Active session not found");
-    s.status = "cashed_out"; s.updatedAt = now(); if (s.payout > 0) addLedger(db, user.id, "bet_win", s.payout, s.id, `${s.game} cashout`); return s;
+    const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id);
+    if (!s || s.status !== "active") throw new Error("Active session not found");
+    if (!["mines", "tower", "hilo"].includes(s.game)) throw new Error("This session cannot be cashed out manually");
+    if (s.payout <= 0) throw new Error("Nothing to cash out yet");
+    s.status = "cashed_out";
+    s.updatedAt = now();
+    addLedger(db, user.id, "bet_win", s.payout, s.id, `${s.game} cashout`);
+    return s;
   });
-}
-export function startTower(user: User, wager: number, rows = 6) {
-  return transact((db) => { assertRisk(db, user, wager); const wallet = getWallet(db, user.id); if (availableBalance(wallet) < wager) throw new Error("Insufficient balance"); const seed = getSeed(db, user.id); const fair = { serverSeed: seed.serverSeed, clientSeed: seed.clientSeed, nonce: seed.nonce }; const traps = Array.from({ length: rows }, (_, row) => rollInt({ ...fair, cursor: row }, 3)); const s: GameSession = { id: id("game"), userId: user.id, game: "tower", status: "active", wager, payout: 0, profit: -wager, nonce: seed.nonce, clientSeed: seed.clientSeed, serverSeedHash: seed.serverSeedHash, state: { rows, traps, currentRow: 0, picks: [] }, proof: { traps }, idempotencyKey: id("idem"), createdAt: now(), updatedAt: now() }; addLedger(db, user.id, "bet_debit", -wager, s.id, "tower session wager"); seed.nonce += 1; db.gameSessions.unshift(s); return s; });
-}
-export function pickTower(user: User, sessionId: string, pick: number) {
-  return transact((db) => { const s = db.gameSessions.find((x) => x.id === sessionId && x.userId === user.id && x.game === "tower"); if (!s || s.status !== "active") throw new Error("Active Tower session not found"); const row = Number(s.state.currentRow || 0); const traps = s.state.traps as number[]; const picks = s.state.picks as number[]; if (pick < 0 || pick > 2) throw new Error("Invalid tower pick"); if (traps[row] === pick) { s.status = "busted"; s.profit = -s.wager; } else { picks.push(pick); s.state.picks = picks; s.state.currentRow = row + 1; s.payout = roundMoney(s.wager * (1 + picks.length * 0.4)); s.profit = roundMoney(s.payout - s.wager); if (row + 1 >= traps.length) s.status = "complete"; if (s.status === "complete") addLedger(db, user.id, "bet_win", s.payout, s.id, "tower complete"); } s.updatedAt = now(); return s; });
 }
 
 export function setRisk(admin: User, userId: string, patch: Partial<{ frozen: boolean; selfExcludedUntil: string; coolOffUntil: string; wagerLimit: number; depositLimit: number; lossLimit: number; amlStatus: User["amlStatus"]; kycStatus: User["kycStatus"] }>) {
