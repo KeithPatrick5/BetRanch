@@ -23,7 +23,12 @@ export async function getSessionUser(): Promise<User | null> {
   const jar = await cookies();
   const sid = jar.get(cookieName)?.value;
   const db = readDb();
-  if (!sid) return db.users.find((u) => u.email === "rancher@betranch.local") ?? null;
+  if (!sid) {
+    if (process.env.BET_RANCH_ALLOW_DEMO_FALLBACK === "true" && process.env.NODE_ENV !== "production") {
+      return db.users.find((u) => u.email === "rancher@betranch.local") ?? null;
+    }
+    return null;
+  }
   const session = db.sessions.find((item) => item.id === sid && new Date(item.expiresAt).getTime() > Date.now());
   if (!session) return null;
   return db.users.find((user) => user.id === session.userId) ?? null;

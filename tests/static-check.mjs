@@ -2,7 +2,7 @@ import fs from 'fs';
 
 const required = [
   'lib/db.ts', 'lib/auth.ts', 'lib/money.ts', 'lib/store.ts', 'lib/gameEngine.ts', 'lib/fairness.ts',
-  'app/api/auth/login/route.ts', 'app/api/bet/route.ts', 'app/api/wallet/nowpayments/webhook/route.ts',
+  'app/api/auth/login/route.ts', 'app/api/admin/check/route.ts', 'app/api/bet/route.ts', 'app/api/wallet/nowpayments/webhook/route.ts',
   'app/api/games/mines/start/route.ts', 'app/api/games/mines/reveal/route.ts',
   'app/api/games/tower/start/route.ts', 'app/api/games/tower/pick/route.ts',
   'app/api/games/hilo/start/route.ts', 'app/api/games/hilo/pick/route.ts',

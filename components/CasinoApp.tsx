@@ -134,6 +134,8 @@ export function CasinoApp() {
   const activeSession = state.activeSessions.find((session) => session.game === activeGame);
   const displayedSession = activeSession || (lastSession?.game === activeGame ? lastSession : undefined);
   const activeProof = latestBet?.game === activeGame ? latestBet.proof : undefined;
+  const latestDeposit = state.deposits[0];
+  const latestWithdrawal = state.withdrawals[0];
   const availableBalance = roundMoney(state.wallet.balance - state.wallet.locked);
   const rankProgress = Math.min(100, Math.round(((state.wallet.wagered % 500) / 500) * 100));
   const latestBet = state.bets[0];
@@ -275,7 +277,13 @@ export function CasinoApp() {
   }
 
   async function createDeposit() {
-    try { const data = await postJson("/api/wallet/deposit", { amount: depositAmount, currency: "btc" }); setMessage(`Deposit ${data.deposit.id} · ${data.deposit.status}`); }
+    try {
+      const data = await postJson("/api/wallet/deposit", { amount: depositAmount, currency: "btc" });
+      setState(data.state);
+      const checkout = data.deposit.checkoutUrl;
+      setMessage(checkout ? `Deposit ready · open payment link` : `Deposit ${data.deposit.id} · ${data.deposit.status}`);
+      if (typeof checkout === "string" && checkout.startsWith("http")) window.open(checkout, "_blank", "noopener,noreferrer");
+    }
     catch (error) { setMessage(error instanceof Error ? error.message : "Deposit failed"); }
   }
 
@@ -376,7 +384,26 @@ export function CasinoApp() {
         </section>
 
         <section className="data-grid v5-data">
-          <div className="casino-panel v5-panel" id="wallet"><div className="section-head v5-head"><h2>Wallet</h2><span className="muted">BTC</span></div><div className="wallet-controls"><input type="number" value={depositAmount} onChange={(event) => setDepositAmount(Number(event.target.value))} /><button className="btn blue" onClick={createDeposit} disabled={busy}>Deposit</button><input type="number" value={withdrawAmount} onChange={(event) => setWithdrawAmount(Number(event.target.value))} /><button className="btn" onClick={requestWithdrawal} disabled={busy}>Withdraw</button></div><input className="address-input" value={withdrawAddress} onChange={(event) => setWithdrawAddress(event.target.value)} /><div className="wallet-summary"><span>Locked {formatMoney(state.wallet.locked)}</span><b>Available {formatMoney(availableBalance)}</b></div></div>
+          <div className="casino-panel v5-panel wallet-panel" id="wallet">
+            <div className="section-head v5-head"><h2>Wallet</h2><span className="muted">One-time deposits</span></div>
+            <div className="wallet-controls">
+              <input type="number" value={depositAmount} onChange={(event) => setDepositAmount(Number(event.target.value))} />
+              <button className="btn blue" onClick={createDeposit} disabled={busy}>Create Deposit</button>
+              <input type="number" value={withdrawAmount} onChange={(event) => setWithdrawAmount(Number(event.target.value))} />
+              <button className="btn" onClick={requestWithdrawal} disabled={busy}>Withdraw</button>
+            </div>
+            <input className="address-input" value={withdrawAddress} onChange={(event) => setWithdrawAddress(event.target.value)} />
+            {latestDeposit && <div className="payment-card">
+              <span>Latest deposit</span>
+              <b>{formatMoney(latestDeposit.amount)} · {latestDeposit.currency.toUpperCase()} · {latestDeposit.status}</b>
+              {latestDeposit.checkoutUrl && <a href={latestDeposit.checkoutUrl} target="_blank" rel="noreferrer">Open payment page</a>}
+            </div>}
+            {latestWithdrawal && <div className="payment-card">
+              <span>Latest withdrawal</span>
+              <b>{formatMoney(latestWithdrawal.amount)} · {latestWithdrawal.currency.toUpperCase()} · {latestWithdrawal.status}</b>
+            </div>}
+            <div className="wallet-summary"><span>Locked {formatMoney(state.wallet.locked)}</span><b>Available {formatMoney(availableBalance)}</b></div>
+          </div>
           <div className="casino-panel v5-panel" id="fair"><div className="section-head v5-head"><h2>Fairness</h2><button className="btn compact" onClick={rotateSeed} disabled={busy}>Rotate</button></div><div className="fair-lines"><p><span>Hash</span><b>{state.seed.serverSeedHash}</b></p><p><span>Client</span><input value={clientSeed} onChange={(event) => setClientSeed(event.target.value)} /></p><p><span>Nonce</span><b>{state.seed.nonce}</b></p></div></div>
         </section>
       </main>

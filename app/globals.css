@@ -1417,3 +1417,32 @@ th, td { padding: 9px 8px; border-bottom: 1px solid var(--v6-line-soft); }
 .wheel-core {
   transition: rotate .25s ease;
 }
+
+/* v14 wallet flow polish */
+.payment-card {
+  margin-top: 12px;
+  border: 1px solid rgba(212,175,55,.24);
+  background: rgba(15,23,45,.72);
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+}
+.payment-card span {
+  color: var(--v5-muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.payment-card b {
+  color: #fff;
+}
+.payment-card a {
+  width: max-content;
+  color: #06140b;
+  background: var(--v5-green);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-weight: 900;
+}

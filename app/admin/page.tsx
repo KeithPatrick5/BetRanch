@@ -18,6 +18,8 @@ export default function AdminPage() {
   const [message, setMessage] = useState("Loading control room...");
 
   async function load() {
+    const check = await fetch("/api/admin/check", { cache: "no-store" });
+    if (!check.ok) throw new Error("Admin access required");
     const response = await fetch("/api/admin/summary", { cache: "no-store" });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || "Admin failed");

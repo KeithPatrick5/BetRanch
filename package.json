@@ -4,7 +4,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node tests/static-check.mjs && node tests/frontend-game-map.mjs && node tests/payment-security-check.mjs && tsx tests/backend-game-tests.mjs"
+    "test": "node tests/static-check.mjs && node tests/frontend-game-map.mjs && node tests/payment-security-check.mjs && node tests/vps-production-check.mjs && tsx tests/backend-game-tests.mjs"
   },
   "dependencies": {
     "@next/eslint-plugin-next": "latest",

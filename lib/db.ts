@@ -20,11 +20,39 @@ export type AuditLog = { id: string; actorUserId: string; action: string; target
 export type IdempotencyEntry = { key: string; scope: string; refId: string; response: unknown; createdAt: string };
 export type AppDb = { users: User[]; sessions: Session[]; wallets: Wallet[]; ledgers: LedgerEntry[]; bets: BetRecord[]; gameSessions: GameSession[]; seeds: Record<string, SeedPair>; revealedSeeds: Array<SeedPair & { userId: string }>; deposits: Deposit[]; withdrawals: Withdrawal[]; rewards: RewardState[]; risks: RiskProfile[]; creators: CreatorCode[]; auditLogs: AuditLog[]; idempotency: IdempotencyEntry[] };
 
-const dir = path.join(process.cwd(), ".betranch");
-const file = path.join(dir, "db.json");
+const dir = process.env.BET_RANCH_DATA_DIR || path.join(process.cwd(), ".betranch");
+const file = process.env.BET_RANCH_DB_FILE || path.join(dir, "db.json");
+const lockFile = `${file}.lock`;
 export const now = () => new Date().toISOString();
 export const id = (prefix: string) => `${prefix}_${crypto.randomBytes(6).toString("hex")}`;
 export const roundMoney = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
+
+function sleep(ms: number) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    // tiny synchronous lock wait for single VPS/local file persistence
+  }
+}
+
+function acquireFileLock() {
+  fs.mkdirSync(dir, { recursive: true });
+  const started = Date.now();
+  while (true) {
+    try {
+      const fd = fs.openSync(lockFile, "wx");
+      fs.writeFileSync(fd, `${process.pid}:${Date.now()}`);
+      return fd;
+    } catch {
+      if (Date.now() - started > 5000) throw new Error("Database lock timeout");
+      sleep(20);
+    }
+  }
+}
+
+function releaseFileLock(fd: number) {
+  try { fs.closeSync(fd); } catch {}
+  try { fs.unlinkSync(lockFile); } catch {}
+}
 
 export function hashPassword(password: string, salt = crypto.randomBytes(16).toString("hex")) {
   const hash = crypto.pbkdf2Sync(password, salt, 100000, 32, "sha256").toString("hex");
@@ -48,7 +76,33 @@ function reward(userId: string): RewardState { return { userId, rakebackAccrued:
 function risk(userId: string): RiskProfile { return { userId, ageGateAccepted: true, depositLimit: 500, lossLimit: 250, wagerLimit: 1000, flags: [] }; }
 
 function ensureDir() { if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true }); }
-export function readDb(): AppDb { ensureDir(); if (!fs.existsSync(file)) writeDb(initialDb()); return JSON.parse(fs.readFileSync(file, "utf8")) as AppDb; }
-export function writeDb(db: AppDb) { ensureDir(); const tmp = `${file}.${process.pid}.tmp`; fs.writeFileSync(tmp, JSON.stringify(db, null, 2)); fs.renameSync(tmp, file); }
-export function transact<T>(fn: (db: AppDb) => T): T { const db = readDb(); const result = fn(db); writeDb(db); return result; }
-export function resetLocalDb() { writeDb(initialDb()); }
+export function readDb(): AppDb {
+  ensureDir();
+  if (!fs.existsSync(file)) writeDb(initialDb());
+  return JSON.parse(fs.readFileSync(file, "utf8")) as AppDb;
+}
+export function writeDb(db: AppDb) {
+  ensureDir();
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+  fs.renameSync(tmp, file);
+}
+export function transact<T>(fn: (db: AppDb) => T): T {
+  const fd = acquireFileLock();
+  try {
+    const db = readDb();
+    const result = fn(db);
+    writeDb(db);
+    return result;
+  } finally {
+    releaseFileLock(fd);
+  }
+}
+export function resetLocalDb() {
+  const fd = acquireFileLock();
+  try {
+    writeDb(initialDb());
+  } finally {
+    releaseFileLock(fd);
+  }
+}
